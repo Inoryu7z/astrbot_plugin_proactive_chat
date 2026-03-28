@@ -7,8 +7,8 @@
 适用范围：
 
 - 外部通知推送平台
-- [`astrbot_plugin_proactive_chat`]
-- [`astrbot_plugin_disaster_warning`]
+- `astrbot_plugin_proactive_chat`
+- `astrbot_plugin_disaster_warning`
 - 插件 Web 管理端前端通知中心
 
 本文档基于当前已确认的远端 JSON 返回体编写。
