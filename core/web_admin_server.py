@@ -16,6 +16,8 @@ from typing import Any
 
 from astrbot.api import logger
 
+from ..utils.version import get_plugin_version
+
 try:
     # Web 管理端完全基于 FastAPI / Uvicorn 提供 HTTP 与 WebSocket 能力。
     import uvicorn
@@ -78,8 +80,8 @@ class WebAdminServer:
         self._tokens: dict[str, float] = {}
         # 仅当配置中设置了密码时才开启鉴权。
         self._auth_enabled = bool(self.config.get("web_admin", {}).get("password", ""))
-        # 缓存插件元数据版本，避免在高频状态轮询与广播中重复同步读取文件。
-        self._metadata_version = self._read_metadata_version()
+        # 缓存插件版本，避免在高频状态轮询与广播中重复读取文件。
+        self._metadata_version = get_plugin_version(default="未知版本")
 
         if FASTAPI_AVAILABLE:
             # 只有环境具备依赖时才构建 Web 应用，避免 import 失败影响插件主体。
@@ -559,12 +561,29 @@ class WebAdminServer:
 
         @self.app.post("/api/jobs/{umo:path}/trigger")
         async def trigger_job(umo: str):
-            # 立即手动触发一次指定会话的检查与发言流程，不阻塞当前请求。
+            # 立即手动触发一次指定会话的检查与发言流程；同一会话在执行完成前禁止重复触发。
             normalized = self.plugin._normalize_session_id(umo)
+            if normalized in self.plugin.manual_trigger_sessions:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "session": normalized,
+                        "in_progress": True,
+                        "message": "该任务正在立即触发中，请等待当前执行完成",
+                    },
+                    status_code=409,
+                )
+
+            self.plugin.manual_trigger_sessions.add(normalized)
             # 主动创建后台任务，避免前端请求长时间挂起等待业务执行完成。
             asyncio.create_task(self.plugin.check_and_chat(normalized))
             await self._broadcast_update("jobs")
-            return {"ok": True, "session": normalized}
+            return {
+                "ok": True,
+                "session": normalized,
+                "in_progress": True,
+                "message": "已开始立即触发，正在等待 LLM 完成回复",
+            }
 
         @self.app.delete("/api/jobs/{umo:path}")
         async def cancel_job(umo: str):
@@ -865,21 +884,6 @@ class WebAdminServer:
             "group_timer_cards": group_cards,
         }
 
-    def _read_metadata_version(self) -> str | None:
-        """读取插件 metadata.yaml 中声明的版本号。"""
-        try:
-            metadata_path = Path(__file__).resolve().parent.parent / "metadata.yaml"
-            if not metadata_path.exists():
-                return None
-
-            for line in metadata_path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped.startswith("version:"):
-                    return stripped.split(":", 1)[1].strip().strip('"').strip("'")
-        except Exception as e:
-            logger.debug(f"[主动消息] 读取 metadata 版本失败喵: {e}")
-        return None
-
     def _build_status_payload(self) -> dict[str, Any]:
         now = time.time()
         uptime_sec = max(0, int(now - self.plugin.plugin_start_time))
@@ -940,6 +944,8 @@ class WebAdminServer:
                         job.next_run_time.isoformat() if job.next_run_time else None
                     ),
                     "unanswered_count": session_data.get("unanswered_count", 0),
+                    "manual_trigger_in_progress": session_id
+                    in self.plugin.manual_trigger_sessions,
                     # 以下字段用于前端推导进度条与调度窗口说明。
                     "next_trigger_time": session_data.get("next_trigger_time"),
                     "last_scheduled_at": session_data.get("last_scheduled_at"),
@@ -990,6 +996,8 @@ class WebAdminServer:
                     "unanswered_count": self.plugin.session_data.get(session, {}).get(
                         "unanswered_count", 0
                     ),
+                    "manual_trigger_in_progress": session
+                    in self.plugin.manual_trigger_sessions,
                 }
             )
         return result
@@ -1007,50 +1015,51 @@ class WebAdminServer:
             }
         return await self.plugin.notification_center.get_payload()
 
-    def _get_markdown_document_roots(self) -> list[Path]:
-        """返回允许前端浏览的 Markdown 文档根目录。"""
-        plugin_root = Path(__file__).resolve().parent.parent
-        # 根目录与 docs 目录都纳入浏览范围，覆盖 README / CHANGELOG 与附加文档场景。
-        return [plugin_root, plugin_root / "docs"]
-
     def _list_markdown_documents(self) -> list[dict[str, Any]]:
         """列出允许浏览的 Markdown 文档摘要。"""
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
+        plugin_root = Path(__file__).resolve().parent.parent.resolve()
+        docs_root = (plugin_root / "docs").resolve()
 
-        for root in self._get_markdown_document_roots():
-            if not root.exists():
+        allowed_paths: list[Path] = []
+
+        # 插件根目录只暴露顶层 Markdown 文档，避免把实现目录中的内部文档一并暴露出来。
+        if plugin_root.exists():
+            allowed_paths.extend(sorted(plugin_root.glob("*.md")))
+
+        # docs 目录作为显式文档区，允许递归收集其中的所有 Markdown 文件。
+        if docs_root.exists():
+            allowed_paths.extend(sorted(docs_root.rglob("*.md")))
+
+        for path in allowed_paths:
+            if not path.is_file():
                 continue
 
-            for path in sorted(root.rglob("*.md")):
-                if not path.is_file():
-                    continue
+            try:
+                # 所有路径统一转为插件工作区相对路径，方便前端展示与请求。
+                relative_path = self._to_workspace_relative_path(path)
+            except ValueError:
+                # 若文件不在工作区内，说明超出允许范围，直接忽略。
+                continue
 
-                try:
-                    # 所有路径统一转为插件工作区相对路径，方便前端展示与请求。
-                    relative_path = self._to_workspace_relative_path(path)
-                except ValueError:
-                    # 若文件不在工作区内，说明超出允许范围，直接忽略。
-                    continue
+            normalized = relative_path.replace("\\", "/")
+            if normalized in seen:
+                continue
+            seen.add(normalized)
 
-                normalized = relative_path.replace("\\", "/")
-                if normalized in seen:
-                    continue
-                seen.add(normalized)
-
-                plugin_root = Path(__file__).resolve().parent.parent.resolve()
-                items.append(
-                    {
-                        "path": normalized,
-                        # title 面向展示，filename 更偏向调试或原始文件识别。
-                        "title": path.stem,
-                        "filename": path.name,
-                        # category 便于前端未来按目录做分组；插件根目录下文件统一标为 root。
-                        "category": "root"
-                        if path.parent.resolve() == plugin_root
-                        else path.parent.name,
-                    }
-                )
+            items.append(
+                {
+                    "path": normalized,
+                    # title 面向展示，filename 更偏向调试或原始文件识别。
+                    "title": path.stem,
+                    "filename": path.name,
+                    # category 便于前端未来按目录做分组；插件根目录下文件统一标为 root。
+                    "category": "root"
+                    if path.parent.resolve() == plugin_root
+                    else path.parent.name,
+                }
+            )
 
         # 优先展示根目录文档，再按路径字母序排序，通常更符合 README / CHANGELOG 的阅读优先级。
         items.sort(
@@ -1075,24 +1084,26 @@ class WebAdminServer:
             return None
 
         plugin_root = Path(__file__).resolve().parent.parent.resolve()
+        docs_root = (plugin_root / "docs").resolve()
         candidate = (plugin_root / normalized).resolve()
-        allowed_roots = [
-            root.resolve()
-            for root in self._get_markdown_document_roots()
-            if root.exists()
-        ]
 
         if not candidate.is_file():
             return None
 
-        for root in allowed_roots:
-            try:
-                # 只有 candidate 仍处于允许根目录之下时才算合法文件。
-                candidate.relative_to(root)
-                return candidate
-            except ValueError:
-                continue
-        return None
+        try:
+            relative_path = candidate.relative_to(plugin_root)
+        except ValueError:
+            return None
+
+        # 根目录仅允许访问顶层 Markdown；docs 目录允许访问其内部任意层级 Markdown。
+        if relative_path.parent == Path("."):
+            return candidate
+
+        try:
+            candidate.relative_to(docs_root)
+            return candidate
+        except ValueError:
+            return None
 
     def _to_workspace_relative_path(self, path: Path) -> str:
         """将绝对路径转换为插件工作区内的相对路径。"""

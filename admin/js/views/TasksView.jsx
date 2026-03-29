@@ -99,6 +99,7 @@ function TasksView({ onRefresh }) {
     const api = useApi();
     // 每秒刷新当前时间，驱动任务卡片上的倒计时与进度条更新。
     const [nowMs, setNowMs] = React.useState(Date.now());
+    const [triggerFeedbackMap, setTriggerFeedbackMap] = React.useState({});
     const displayTimezone = state.config?.displayTimezone || 'Asia/Shanghai';
 
     React.useEffect(() => {
@@ -109,11 +110,26 @@ function TasksView({ onRefresh }) {
     }, []);
 
     const triggerNow = async (session) => {
+        setTriggerFeedbackMap((prev) => ({
+            ...prev,
+            [session]: { status: 'pending', text: '正在触发，等待 LLM 回复完成…' },
+        }));
         try {
             // 手动触发后会重新走一次父级全量刷新，确保状态页与任务页同步更新。
-            await api.triggerJob(session);
+            const result = await api.triggerJob(session);
+            setTriggerFeedbackMap((prev) => ({
+                ...prev,
+                [session]: {
+                    status: 'pending',
+                    text: result?.message || '已开始立即触发，正在等待 LLM 回复完成…',
+                },
+            }));
             await onRefresh();
         } catch (e) {
+            setTriggerFeedbackMap((prev) => ({
+                ...prev,
+                [session]: { status: 'error', text: e.message || '触发任务失败，请稍后重试' },
+            }));
             dispatch({ type: 'SET_ERROR', payload: e.message || '触发任务失败' });
         }
     };
@@ -128,6 +144,55 @@ function TasksView({ onRefresh }) {
     };
 
     const jobs = state.jobs || [];
+
+    React.useEffect(() => {
+        setTriggerFeedbackMap((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            jobs.forEach((job) => {
+                if (job.manual_trigger_in_progress) {
+                    const current = next[job.id];
+                    const expectedText = '正在触发，等待 LLM 回复完成…';
+                    if (!current || current.status !== 'pending' || current.text !== expectedText) {
+                        next[job.id] = { status: 'pending', text: expectedText };
+                        changed = true;
+                    }
+                    return;
+                }
+
+                if (next[job.id]?.status === 'pending') {
+                    next[job.id] = { status: 'success', text: '本次立即触发已完成，按钮已恢复可用' };
+                    changed = true;
+                }
+            });
+            return changed ? next : prev;
+        });
+    }, [jobs]);
+
+    React.useEffect(() => {
+        const successEntries = Object.entries(triggerFeedbackMap)
+            .filter(([, value]) => value?.status === 'success');
+        if (successEntries.length === 0) {
+            return undefined;
+        }
+
+        const timers = successEntries.map(([sessionId]) => setTimeout(() => {
+            setTriggerFeedbackMap((prev) => {
+                const current = prev[sessionId];
+                if (!current || current.status !== 'success') {
+                    return prev;
+                }
+
+                const next = { ...prev };
+                delete next[sessionId];
+                return next;
+            });
+        }, 3000));
+
+        return () => {
+            timers.forEach((timer) => clearTimeout(timer));
+        };
+    }, [triggerFeedbackMap]);
 
     return (
         <Box>
@@ -160,6 +225,13 @@ function TasksView({ onRefresh }) {
                         const sessionDisplayName = String(job.session_display_name || job.session_name || sessionIdText || '--');
                         const hasAlias = Boolean(sessionDisplayName && sessionIdText && sessionDisplayName !== sessionIdText);
                         const sessionSubText = hasAlias ? sessionIdText : '';
+
+                        const isTriggerRunning = Boolean(job.manual_trigger_in_progress);
+                        const triggerFeedback = triggerFeedbackMap[job.id];
+                        const triggerButtonLabel = isTriggerRunning ? '触发中…' : '立即触发';
+                        const triggerHelperText = isTriggerRunning
+                            ? (triggerFeedback?.text || '正在触发，等待 LLM 回复完成…')
+                            : triggerFeedback?.text;
 
                         return (
                             <div className={`card task-card-enhanced ${task.status === 'urgent' ? 'is-urgent' : ''} ${task.status === 'expired' ? 'is-expired' : ''}`} key={job.id}>
@@ -213,15 +285,32 @@ function TasksView({ onRefresh }) {
                                     </div>
                                 </div>
 
-                                <Box sx={{ display: 'flex', gap: 1, mt: 'auto', pt: 1.5 }}>
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 'auto', pt: 1.5 }}>
+                                   {triggerHelperText ? (
+                                       <Typography
+                                           variant="caption"
+                                           sx={{
+                                               minHeight: 20,
+                                               color: triggerFeedback?.status === 'error'
+                                                   ? 'error.main'
+                                                   : triggerFeedback?.status === 'success'
+                                                       ? 'success.main'
+                                                       : 'text.secondary',
+                                           }}
+                                       >
+                                           {triggerHelperText}
+                                       </Typography>
+                                   ) : null}
+                                   <Box sx={{ display: 'flex', gap: 1 }}>
                                     <Button
                                         variant="outlined"
                                         size="small"
                                         fullWidth
+                                        disabled={isTriggerRunning}
                                         onClick={() => triggerNow(job.id)}
                                         sx={{ borderRadius: 2.5 }}
                                     >
-                                        立即触发
+                                        {triggerButtonLabel}
                                     </Button>
                                     <Button
                                         variant="outlined"
@@ -233,6 +322,7 @@ function TasksView({ onRefresh }) {
                                     >
                                         取消任务
                                     </Button>
+                                   </Box>
                                 </Box>
                             </div>
                         );
