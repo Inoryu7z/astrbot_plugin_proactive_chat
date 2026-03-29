@@ -249,16 +249,12 @@ class ProactiveCoreMixin:
                 unanswered_count,
             )
 
-            # 群聊由沉默倒计时驱动，不依赖持久化 next_trigger_time，故在此清理
+            # 群聊由沉默倒计时驱动，不依赖持久化调度字段，故在此清理残留状态
             parsed = self._parse_session_id(session_id)
             is_group_session = parsed and ("Group" in parsed[1] or "Guild" in parsed[1])
             if is_group_session:
                 async with self.data_lock:
-                    if (
-                        session_id in self.session_data
-                        and "next_trigger_time" in self.session_data[session_id]
-                    ):
-                        del self.session_data[session_id]["next_trigger_time"]
+                    if self._clear_session_schedule_state(session_id):
                         await self._save_data_internal()
 
         except Exception as e:
@@ -272,11 +268,7 @@ class ProactiveCoreMixin:
             # 清理失败任务的持久化调度痕迹，避免下次启动误恢复
             try:
                 async with self.data_lock:
-                    if (
-                        session_id in self.session_data
-                        and "next_trigger_time" in self.session_data[session_id]
-                    ):
-                        del self.session_data[session_id]["next_trigger_time"]
+                    if self._clear_session_schedule_state(session_id):
                         await self._save_data_internal()
             except Exception as clean_e:
                 logger.debug(f"[主动消息] 清理失败任务数据时出错喵: {clean_e}")

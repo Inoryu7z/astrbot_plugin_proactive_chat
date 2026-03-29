@@ -177,6 +177,67 @@ class SchedulerMixin:
     def _is_friend_type(self, msg_type: str) -> bool:
         return "Friend" in msg_type or "Private" in msg_type
 
+    def _is_persisted_task_still_valid(
+        self,
+        session_id: str,
+        session_info: dict | None,
+        current_time: float | None = None,
+    ) -> bool:
+        """判断持久化任务是否仍然有效且可恢复。"""
+        if not isinstance(session_info, dict):
+            return False
+
+        session_config = self._get_session_config(session_id)
+        if not session_config or not session_config.get("enable", False):
+            return False
+
+        next_trigger = session_info.get("next_trigger_time")
+        if not isinstance(next_trigger, (int, float)):
+            return False
+
+        check_time = current_time if current_time is not None else time.time()
+        # 与 APScheduler misfire_grace_time 保持一致，允许 60 秒轻微抖动
+        return check_time < (next_trigger + 60)
+
+    def _clear_session_schedule_state(
+        self,
+        session_id: str,
+        *,
+        keep_unanswered_count: bool = True,
+        keep_last_message_time: bool = True,
+        keep_self_id: bool = True,
+    ) -> bool:
+        """清理会话上的调度持久化字段，避免残留幽灵任务状态。"""
+        session_info = self.session_data.get(session_id)
+        if not isinstance(session_info, dict):
+            return False
+
+        protected_keys = set()
+        if keep_unanswered_count:
+            protected_keys.add("unanswered_count")
+        if keep_last_message_time:
+            protected_keys.add("last_message_time")
+        if keep_self_id:
+            protected_keys.add("self_id")
+
+        schedule_keys = {
+            "next_trigger_time",
+            "last_scheduled_at",
+            "last_schedule_min_interval_seconds",
+            "last_schedule_max_interval_seconds",
+            "last_schedule_random_interval_seconds",
+        }
+
+        changed = False
+        for key in schedule_keys:
+            if key in protected_keys:
+                continue
+            if key in session_info:
+                del session_info[key]
+                changed = True
+
+        return changed
+
     def _purge_related_jobs(self, session_id: str) -> None:
         """清理同一目标但不同 UMO 的调度任务，防止幽灵任务。"""
         parsed = self._parse_session_id(session_id)
@@ -199,7 +260,7 @@ class SchedulerMixin:
                     pass
 
     def _has_related_persisted_task(self, session_id: str) -> bool:
-        """判断同一目标是否存在持久化任务（避免重复触发）。"""
+        """判断同一目标是否存在仍可恢复的持久化任务（避免重复触发）。"""
         parsed = self._parse_session_id(session_id)
         if not parsed:
             return False
@@ -216,13 +277,11 @@ class SchedulerMixin:
             if (
                 self._is_friend_type(existing_type) == is_friend
                 and existing_target == target_id
+                and self._is_persisted_task_still_valid(
+                    existing_id, session_info, current_time=current_time
+                )
             ):
-                next_trigger = session_info.get("next_trigger_time")
-                if next_trigger:
-                    # 与恢复逻辑一致：给予 60 秒宽限，避免边界抖动
-                    trigger_time_with_grace = next_trigger + 60
-                    if current_time < trigger_time_with_grace:
-                        return True
+                return True
 
         return False
 
@@ -359,6 +418,7 @@ class SchedulerMixin:
     async def _init_jobs_from_data(self) -> None:
         """从已加载的 session_data 中恢复定时任务。"""
         restored_count = 0
+        cleaned_runtime_state = 0
         current_time = time.time()
 
         logger.info(
@@ -375,93 +435,80 @@ class SchedulerMixin:
         logger.info(f"[主动消息] 会话数据条目数: {len(self.session_data)}")
 
         # 遍历持久化任务并恢复调度器
-        for session_id, session_info in self.session_data.items():
+        for session_id, session_info in list(self.session_data.items()):
             session_config = self._get_session_config(session_id)
             if not session_config or not session_config.get("enable", False):
+                if self._clear_session_schedule_state(session_id):
+                    cleaned_runtime_state += 1
+                    logger.info(
+                        f"[主动消息] {self._get_session_log_str(session_id, session_config)} 的配置无效或已禁用，已清理残留调度状态喵。"
+                    )
                 continue
 
             # 仅恢复存在 next_trigger_time 的持久化任务
             next_trigger = session_info.get("next_trigger_time")
-            if next_trigger:
-                trigger_time_with_grace = next_trigger + 60
-                is_not_expired = current_time < trigger_time_with_grace
-
-                if is_not_expired:
-                    try:
-                        run_date = datetime.fromtimestamp(
-                            next_trigger, tz=self.timezone
-                        )
-                        existing_job = self.scheduler.get_job(session_id)
-                        if existing_job:
-                            logger.debug(
-                                f"[主动消息] {self._get_session_log_str(session_id, session_config)} 的任务已存在，跳过恢复喵。"
-                            )
-                            continue
-
-                        # 恢复前校验时间间隔：若偏离当前配置区间过大，视为旧任务
-                        min_interval = (
-                            int(
-                                session_config.get("schedule_settings", {}).get(
-                                    "min_interval_minutes", 30
-                                )
-                            )
-                            * 60
-                        )
-                        max_interval = (
-                            int(
-                                session_config.get("schedule_settings", {}).get(
-                                    "max_interval_minutes", 900
-                                )
-                            )
-                            * 60
-                        )
-                        if min_interval > max_interval:
-                            max_interval = min_interval
-
-                        # delta 为“剩余触发秒数”，用于与当前配置区间比对
-                        delta = next_trigger - current_time
-                        if delta < min_interval or delta > max_interval:
-                            logger.info(
-                                f"[主动消息] {self._get_session_log_str(session_id, session_config)} 的持久化任务不在当前间隔范围内，跳过恢复喵。"
-                            )
-                            continue
-
-                        self.scheduler.add_job(
-                            self.check_and_chat,
-                            "date",
-                            run_date=run_date,
-                            args=[session_id],
-                            id=session_id,
-                            replace_existing=True,
-                            misfire_grace_time=60,
-                        )
-                        logger.info(
-                            f"[主动消息] 已成功从文件恢复任务喵: {self._get_session_log_str(session_id, session_config)}, 执行时间: {run_date} 喵"
-                        )
-                        restored_count += 1
-                    except Exception as e:
-                        logger.error(
-                            f"[主动消息] 添加 {self._get_session_log_str(session_id, session_config)} 的恢复任务到调度器时失败喵: {e}"
-                        )
-                else:
-                    logger.info(
-                        f"[主动消息] {self._get_session_log_str(session_id, session_config)} 的任务已过期，跳过恢复喵。"
-                    )
-                    logger.debug(
-                        f"[主动消息] 触发时间: {datetime.fromtimestamp(next_trigger)} 喵"
-                    )
-                    logger.debug(
-                        f"[主动消息] 当前时间: {datetime.fromtimestamp(current_time)} 喵"
-                    )
-                    logger.debug("[主动消息] 宽限期: 60秒喵")
-            else:
+            if not next_trigger:
                 logger.debug(
                     f"[主动消息] {self._get_session_log_str(session_id, session_config)} 没有next_trigger_time，跳过喵"
                 )
+                continue
+
+            if not self._is_persisted_task_still_valid(
+                session_id, session_info, current_time=current_time
+            ):
+                logger.info(
+                    f"[主动消息] {self._get_session_log_str(session_id, session_config)} 的持久化任务已过期或无效，清理后跳过恢复喵。"
+                )
+                if self._clear_session_schedule_state(session_id):
+                    cleaned_runtime_state += 1
+                    logger.debug(
+                        f"[主动消息] 已清理 {self._get_session_log_str(session_id, session_config)} 的过期持久化状态喵。"
+                    )
+                continue
+
+            try:
+                run_date = datetime.fromtimestamp(next_trigger, tz=self.timezone)
+                existing_job = self.scheduler.get_job(session_id)
+                if existing_job:
+                    logger.debug(
+                        f"[主动消息] {self._get_session_log_str(session_id, session_config)} 的任务已存在，跳过恢复喵。"
+                    )
+                    continue
+
+                self.scheduler.add_job(
+                    self.check_and_chat,
+                    "date",
+                    run_date=run_date,
+                    args=[session_id],
+                    id=session_id,
+                    replace_existing=True,
+                    misfire_grace_time=60,
+                )
+                logger.info(
+                    f"[主动消息] 已成功从文件恢复任务喵: {self._get_session_log_str(session_id, session_config)}, 执行时间: {run_date} 喵"
+                )
+                restored_count += 1
+            except Exception as e:
+                logger.error(
+                    f"[主动消息] 添加 {self._get_session_log_str(session_id, session_config)} 的恢复任务到调度器时失败喵: {e}"
+                )
+                if self._clear_session_schedule_state(session_id):
+                    cleaned_runtime_state += 1
+                    logger.warning(
+                        f"[主动消息] {self._get_session_log_str(session_id, session_config)} 的恢复任务创建失败，已清理残留持久化状态喵。"
+                    )
+
+        if cleaned_runtime_state > 0:
+            async with self.data_lock:
+                await self._save_data_internal()
 
         logger.info(
             f"[主动消息] 任务恢复检查完成，共恢复 {restored_count} 个定时任务喵。"
         )
+        if cleaned_runtime_state > 0:
+            logger.info(
+                f"[主动消息] 启动恢复阶段额外清理了 {cleaned_runtime_state} 个残留调度状态喵。"
+            )
         if restored_count == 0:
             logger.info("[主动消息] 没有需要恢复的定时任务喵。")
 

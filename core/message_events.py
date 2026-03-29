@@ -211,7 +211,11 @@ class EventsMixin:
         if (
             not had_scheduled_task
             and normalized_session_id in self.session_data
-            and self.session_data[normalized_session_id].get("next_trigger_time")
+            and self._is_persisted_task_still_valid(
+                normalized_session_id,
+                self.session_data.get(normalized_session_id),
+                current_time=current_time,
+            )
         ):
             had_scheduled_task = True
 
@@ -246,21 +250,26 @@ class EventsMixin:
 
         # 清理计数与任务标记：用户发言后将未回复计数归零
         async with self.data_lock:
+            changed = False
             if normalized_session_id in self.session_data:
                 current_unanswered = self.session_data[normalized_session_id].get(
                     "unanswered_count", 0
                 )
                 self.session_data[normalized_session_id]["unanswered_count"] = 0
+                changed = True
                 if current_unanswered > 0:
                     logger.debug(
                         f"[主动消息] {self._get_session_log_str(normalized_session_id, session_config)} 的用户已回复， 未回复计数器已重置喵。"
                     )
 
-                if (
-                    "group" in normalized_session_id.lower()
-                    and "next_trigger_time" in self.session_data[normalized_session_id]
-                ):
-                    del self.session_data[normalized_session_id]["next_trigger_time"]
+                if "group" in normalized_session_id.lower():
+                    changed = (
+                        self._clear_session_schedule_state(normalized_session_id)
+                        or changed
+                    )
+
+            if changed:
+                await self._save_data_internal()
 
     @filter.after_message_sent()
     async def on_after_message_sent(self, event: AstrMessageEvent):
@@ -289,18 +298,19 @@ class EventsMixin:
         self._purge_related_jobs(normalized_session_id)
 
         async with self.data_lock:
+            changed = False
             if normalized_session_id != session_id and session_id in self.session_data:
                 existing_payload = self.session_data.get(session_id, {})
                 self.session_data.setdefault(normalized_session_id, {}).update(
                     existing_payload
                 )
                 del self.session_data[session_id]
+                changed = True
 
-            if (
-                normalized_session_id in self.session_data
-                and "next_trigger_time" in self.session_data[normalized_session_id]
-            ):
-                del self.session_data[normalized_session_id]["next_trigger_time"]
+            if self._clear_session_schedule_state(normalized_session_id):
+                changed = True
+
+            if changed:
                 await self._save_data_internal()
 
         # 周期性清理临时状态，避免 session_temp_state 长期膨胀
