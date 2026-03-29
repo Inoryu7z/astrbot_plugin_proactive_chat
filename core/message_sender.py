@@ -48,6 +48,15 @@ class SenderMixin:
         content_cleanup_rule = (
             settings.get("content_cleanup_rule", "") if enable_content_cleanup else ""
         )
+        content_cleanup_pattern: re.Pattern[str] | None = None
+        if content_cleanup_rule:
+            try:
+                content_cleanup_pattern = re.compile(content_cleanup_rule)
+            except re.error:
+                logger.error(
+                    "[主动消息] 内容清理正则表达式错误，将跳过内容清理并保留原始分段: "
+                    f"{traceback.format_exc()}"
+                )
 
         if split_mode == "words":
             # words 模式下，先用分段词列表识别切分点。
@@ -72,20 +81,20 @@ class SenderMixin:
                     content = seg[0]
                     if not isinstance(content, str):
                         continue
-                    if content_cleanup_rule:
-                        # 这里的 re.sub 属于“分段后清理”：
+                    if content_cleanup_pattern:
+                        # 这里的 sub 属于“分段后清理”：
                         # content 已经是单个分段，不会再影响其他分段边界。
                         # 这样可避免把正则切分职责与内容删除职责耦合在一起。
-                        content = re.sub(content_cleanup_rule, "", content)
+                        content = content_cleanup_pattern.sub("", content)
                     if content.strip():
                         # 清理后若只剩空白，则直接丢弃，避免发送空消息段。
                         result.append(content)
                 elif seg:
                     cleaned_seg = seg
-                    if content_cleanup_rule:
+                    if content_cleanup_pattern:
                         # 极少数情况下 findall 可能返回非 tuple 的字符串分段；
                         # 这里保持同样的清理策略，确保两类返回值行为一致。
-                        cleaned_seg = re.sub(content_cleanup_rule, "", cleaned_seg)
+                        cleaned_seg = content_cleanup_pattern.sub("", cleaned_seg)
                     if cleaned_seg.strip():
                         result.append(cleaned_seg)
             return result if result else [text]
@@ -107,10 +116,10 @@ class SenderMixin:
         result: list[str] = []
         for seg in split_response:
             cleaned_seg = seg
-            if content_cleanup_rule:
+            if content_cleanup_pattern:
                 # 与 words 模式保持一致：先完成切分，再对每段内容做独立清理。
                 # 这样当默认规则为 [\n] 时，可稳定去除分段回复中残留的空行字符。
-                cleaned_seg = re.sub(content_cleanup_rule, "", cleaned_seg)
+                cleaned_seg = content_cleanup_pattern.sub("", cleaned_seg)
             if cleaned_seg.strip():
                 # 过滤掉清理后为空的分段，避免平台收到空 Plain 消息。
                 result.append(cleaned_seg)
