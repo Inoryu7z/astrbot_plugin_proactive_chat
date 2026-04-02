@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent
 
 
 class EventsMixin:
@@ -19,7 +19,6 @@ class EventsMixin:
     first_message_logged: set[str]
     scheduler: Any
 
-    @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE, priority=999)
     async def on_friend_message(self, event: AstrMessageEvent):
         """监听私聊消息，取消旧任务，并重置计时器和计数器。"""
         # 没有消息内容则无需处理
@@ -108,7 +107,6 @@ class EventsMixin:
             normalized_session_id, reset_counter=True
         )
 
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=998)
     async def on_group_message(self, event: AstrMessageEvent):
         """监听群聊消息流，重置沉默倒计时，并取消已计划的主动消息任务。"""
         if not event.get_messages():
@@ -272,7 +270,6 @@ class EventsMixin:
             if changed:
                 await self._save_data_internal()
 
-    @filter.after_message_sent()
     async def on_after_message_sent(self, event: AstrMessageEvent):
         """监听 Bot 发送消息后事件，重置群聊沉默倒计时。"""
         session_id = event.unified_msg_origin
