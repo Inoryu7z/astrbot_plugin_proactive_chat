@@ -84,7 +84,7 @@
 
             function showError(msg) {
                 // 启动失败时直接在骨架屏上输出错误信息，避免用户只看到空白页。
-                var text = document.getElementById('boot-text');
+                const text = document.getElementById('boot-text');
                 if (text) {
                     text.textContent = msg;
                     text.style.color = '#B3261E';
