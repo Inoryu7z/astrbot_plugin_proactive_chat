@@ -37,6 +37,15 @@
         </div>
         <div class="boot-loader__title">主动消息管理端</div>
         <div class="boot-loader__subtitle" id="boot-text">正在初始化...</div>
+        <div id="boot-login" style="display:none; width:min(360px, calc(100vw - 48px)); margin:16px auto 0; text-align:left;">
+            <label for="boot-password" style="display:block; margin-bottom:8px; font-size:13px; color:#625B71;">管理端密码</label>
+            <input id="boot-password" type="password" autocomplete="current-password" placeholder="请输入访问密码"
+                style="width:100%; box-sizing:border-box; height:44px; padding:0 14px; border:1px solid rgba(103,80,164,0.22); border-radius:14px; background:rgba(255,255,255,0.88); color:#1C1B1F; outline:none; font-size:14px; box-shadow:0 8px 24px rgba(103,80,164,0.08);">
+            <button id="boot-login-button" type="button"
+                style="width:100%; margin-top:12px; height:44px; border:none; border-radius:14px; background:linear-gradient(135deg, #7F67BE 0%, #6750A4 100%); color:#fff; font-size:14px; font-weight:600; cursor:pointer; box-shadow:0 10px 24px rgba(103,80,164,0.22);">
+                登录进入
+            </button>
+        </div>
         <div class="boot-loader__progress">
             <div class="boot-loader__progress-bar"></div>
         </div>
@@ -82,6 +91,110 @@
                 }
             }
 
+            function showInfo(msg) {
+                var text = document.getElementById('boot-text');
+                if (text) {
+                    text.textContent = msg;
+                    text.style.color = '#D05F00';
+                }
+            }
+
+            function setLoginBusy(busy) {
+                var button = document.getElementById('boot-login-button');
+                var input = document.getElementById('boot-password');
+                if (button) {
+                    button.disabled = !!busy;
+                    button.style.opacity = busy ? '0.72' : '1';
+                    button.textContent = busy ? '登录中...' : '登录进入';
+                }
+                if (input) {
+                    input.disabled = !!busy;
+                }
+            }
+
+            function showLoginForm(message) {
+                var login = document.getElementById('boot-login');
+                var input = document.getElementById('boot-password');
+                var button = document.getElementById('boot-login-button');
+                if (login) login.style.display = 'block';
+                if (message) showError(message);
+                setLoginBusy(false);
+
+                if (!button || !input || button.__bootBound) {
+                    if (input) setTimeout(function () { input.focus(); }, 0);
+                    return;
+                }
+
+                function submitLogin() {
+                    var password = input.value || '';
+                    if (!password.trim()) {
+                        showError('请输入管理端密码');
+                        input.focus();
+                        return;
+                    }
+
+                    setLoginBusy(true);
+                    showInfo('正在验证密码...');
+                    fetch('/api/login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ password: password }),
+                    })
+                        .then(function (res) {
+                            return res.json().catch(function () { return null; }).then(function (data) {
+                                return { ok: res.ok, data: data };
+                            });
+                        })
+                        .then(function (result) {
+                            if (!result.ok) {
+                                var errorMessage = result.data && result.data.error ? result.data.error : '登录失败';
+                                throw new Error(errorMessage);
+                            }
+                            var token = result.data && result.data.token;
+                            if (!token) {
+                                throw new Error('登录成功但未获取到访问令牌');
+                            }
+                            window.AuthUtil.setToken(token);
+                            proceed();
+                        })
+                        .catch(function (err) {
+                            showError(err && err.message ? err.message : '登录失败，请稍后重试');
+                            setLoginBusy(false);
+                            input.focus();
+                            input.select();
+                        });
+                }
+
+                button.addEventListener('click', submitLogin);
+                input.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        submitLogin();
+                    }
+                });
+                button.__bootBound = true;
+                setTimeout(function () { input.focus(); }, 0);
+            }
+
+            function verifyExistingToken(token) {
+                // 通过访问受保护接口来验证 token 是否仍然有效。
+                return fetch('/api/status', {
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                    },
+                }).then(function (res) {
+                    if (res.status === 401) {
+                        // 若 token 失效，则清理本地缓存，避免前端继续携带错误凭证。
+                        window.AuthUtil.clearToken();
+                        showLoginForm('访问令牌已失效，请重新登录');
+                        return;
+                    }
+                    proceed();
+                });
+            }
+
             // 第一步：询问后端当前是否启用了管理端密码。
             fetch('/api/auth-info')
                 .then(function (res) { return res.json(); })
@@ -95,24 +208,11 @@
                     // 已启用鉴权时，从 localStorage 中取出历史 token 进行有效性验证。
                     var token = window.AuthUtil.getToken();
                     if (!token) {
-                        showError('请先通过登录接口获取访问令牌');
+                        showLoginForm('请输入管理端密码以继续访问');
                         return;
                     }
 
-                    // 通过访问受保护接口来验证 token 是否仍然有效。
-                    return fetch('/api/status', {
-                        headers: {
-                            'Authorization': 'Bearer ' + token,
-                        },
-                    }).then(function (res) {
-                        if (res.status === 401) {
-                            // 若 token 失效，则清理本地缓存，避免前端继续携带错误凭证。
-                            window.AuthUtil.clearToken();
-                            showError('访问令牌已失效，请重新登录');
-                            return;
-                        }
-                        proceed();
-                    });
+                    return verifyExistingToken(token);
                 })
                 .catch(function () {
                     // 管理端不可达通常意味着后端服务未启动或网络异常。
