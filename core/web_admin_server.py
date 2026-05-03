@@ -418,6 +418,30 @@ class WebAdminServer:
             # 返回调度器中的待执行任务列表，供任务页卡片展示。
             return {"jobs": self._collect_jobs()}
 
+        @self.app.post("/api/jobs/{umo:path}/reschedule")
+        async def reschedule_job(umo: str):
+            normalized = self.plugin._normalize_session_id(umo)
+            session_config = self.plugin._get_session_config(normalized)
+            if not session_config or not session_config.get("enable", False):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "session": normalized,
+                        "error": "会话未启用或配置不存在，无法重新调度",
+                    },
+                    status_code=400,
+                )
+
+            await self.plugin._schedule_next_chat_and_save(
+                normalized, reset_counter=False
+            )
+            await self._broadcast_update("jobs")
+            return {
+                "ok": True,
+                "session": normalized,
+                "message": "已重新调度下一次主动消息时间",
+            }
+
         @self.app.get("/api/notifications")
         async def get_notifications():
             # 通知列表统一从插件本地缓存读取，前端不直接访问外部通知平台。
@@ -788,6 +812,8 @@ class WebAdminServer:
             session_config = self.plugin._get_session_config(session_id) or {}
             session_data = self.plugin.session_data.get(session_id, {})
             auto_settings = session_config.get("auto_trigger_settings", {})
+            schedule_settings = session_config.get("schedule_settings", {})
+            context_settings = session_config.get("context_settings", {})
             trigger_delay_minutes = int(
                 auto_settings.get("auto_trigger_after_minutes", 0) or 0
             )
@@ -817,6 +843,12 @@ class WebAdminServer:
                     "session_category": self._detect_session_category(
                         normalized_session_id
                     ),
+                    "source_mode": context_settings.get(
+                        "source_mode", "conversation_history"
+                    ),
+                    "max_unanswered_times": schedule_settings.get(
+                        "max_unanswered_times", 0
+                    ),
                     "timer_kind": "auto_trigger",
                     "title": "自动触发检测",
                     # remaining_seconds 可用时说明计时器处于有效运行状态，否则只能标为 unknown。
@@ -837,6 +869,8 @@ class WebAdminServer:
                 self.plugin._get_session_config(normalized_session_id) or {}
             )
             session_data = self.plugin.session_data.get(normalized_session_id, {})
+            schedule_settings = session_config.get("schedule_settings", {})
+            context_settings = session_config.get("context_settings", {})
             idle_minutes = int(session_config.get("group_idle_trigger_minutes", 0) or 0)
             idle_seconds = max(0, idle_minutes * 60)
             timer_meta = self._safe_timer_meta(timer, now)
@@ -872,6 +906,12 @@ class WebAdminServer:
                     ),
                     "session_category": self._detect_session_category(
                         normalized_session_id
+                    ),
+                    "source_mode": context_settings.get(
+                        "source_mode", "platform_message_history"
+                    ),
+                    "max_unanswered_times": schedule_settings.get(
+                        "max_unanswered_times", 0
                     ),
                     "timer_kind": "group_silence",
                     "title": "群沉默检测",
@@ -958,6 +998,8 @@ class WebAdminServer:
             session_data = self.plugin.session_data.get(session_id, {})
             session_config = self.plugin._get_session_config(session_id) or {}
             schedule_settings = session_config.get("schedule_settings", {})
+            context_settings = session_config.get("context_settings", {})
+            auto_trigger_settings = session_config.get("auto_trigger_settings", {})
             jobs.append(
                 {
                     "id": session_id,
@@ -966,6 +1008,14 @@ class WebAdminServer:
                     ),
                     "session_display_name": self.plugin._get_session_display_name(
                         session_id, session_config
+                    ),
+                    "session_category": self._detect_session_category(session_id),
+                    "source_mode": context_settings.get(
+                        "source_mode", "conversation_history"
+                    ),
+                    "max_unanswered_times": schedule_settings.get(
+                        "max_unanswered_times",
+                        auto_trigger_settings.get("max_unanswered_times", 0),
                     ),
                     # APScheduler 的 next_run_time 是 datetime，这里统一序列化为 ISO 字符串。
                     "next_run_time": (
