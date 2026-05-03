@@ -64,7 +64,7 @@ class WebAdminServer:
         self.plugin = plugin
         # 直接缓存配置引用，便于路由中统一读写。
         self.config = plugin.config
-        # FastAPI 应用实例，仅在依赖存在时初始化。
+        # FastAPI 应用实例，仅在依赖存在且初始化成功时设置。
         self.app: FastAPI | None = None
         # Uvicorn Server 实例，用于控制启动与停止。
         self.server = None
@@ -82,10 +82,24 @@ class WebAdminServer:
         self._auth_enabled = bool(self.config.get("web_admin", {}).get("password", ""))
         # 缓存插件版本，避免在高频状态轮询与广播中重复读取文件。
         self._metadata_version = get_plugin_version(default="未知版本")
+        # 标记 Web 管理端当前是否可用，便于启动阶段做更精确的降级判断。
+        self._web_admin_available = False
+        # 记录最近一次初始化失败原因，便于日志诊断依赖冲突或运行环境问题。
+        self._web_admin_init_error: str | None = None
 
         if FASTAPI_AVAILABLE:
-            # 只有环境具备依赖时才构建 Web 应用，避免 import 失败影响插件主体。
-            self._setup_app()
+            # 只有环境具备依赖时才尝试构建 Web 应用；若构建失败则降级禁用 Web 端，不影响插件主体。
+            try:
+                self._setup_app()
+                self._web_admin_available = self.app is not None
+            except Exception as e:
+                self.app = None
+                self._web_admin_available = False
+                self._web_admin_init_error = str(e)
+                logger.error(
+                    "[主动消息] Web 管理端初始化失败喵，已自动禁用，不影响插件主体功能。"
+                    f" 可能是 FastAPI / Pydantic 依赖版本不兼容: {e}"
+                )
 
     def _setup_app(self) -> None:
         # 创建 FastAPI 应用，版本号用于控制台元信息展示。
@@ -1189,6 +1203,18 @@ class WebAdminServer:
     async def start(self) -> None:
         if not FASTAPI_AVAILABLE:
             logger.error("[主动消息] 无法启动 Web 管理端喵: FastAPI 未安装")
+            return
+
+        if not self._web_admin_available or not self.app:
+            detail = (
+                f" 初始化失败原因: {self._web_admin_init_error}"
+                if self._web_admin_init_error
+                else ""
+            )
+            logger.error(
+                "[主动消息] 无法启动 Web 管理端喵: 初始化未完成或依赖不兼容，已自动禁用。"
+                f"{detail}"
+            )
             return
 
         web_admin = self.config.get("web_admin", {})
