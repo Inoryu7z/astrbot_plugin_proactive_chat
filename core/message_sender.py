@@ -262,7 +262,15 @@ class SenderMixin:
         chain: MessageChain,
     ) -> None:
         """将主动消息补写入平台消息流水，弥补部分适配器不会自动持久化的问题。"""
-        parsed = self._parse_session_id(session_id)
+        try:
+            parsed = self._parse_session_id(session_id)
+        except Exception as e:
+            logger.warning(
+                f"[主动消息] 解析会话标识失败，跳过平台流水补写喵: {e}",
+                exc_info=True,
+            )
+            return
+
         if not parsed:
             return
 
@@ -278,6 +286,7 @@ class SenderMixin:
                 return
 
             attachments_dir = Path(self.data_dir) / "attachments"
+            attachments_dir.mkdir(parents=True, exist_ok=True)
             message_parts = await message_chain_to_storage_message_parts(
                 chain,
                 insert_attachment=insert_attachment,
