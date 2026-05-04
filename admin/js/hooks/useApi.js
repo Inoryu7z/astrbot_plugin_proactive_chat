@@ -69,6 +69,10 @@ function useApi() {
         (session) => window.HttpUtil.del(`/api/jobs/${encodeURIComponent(session)}`),
         []
     );
+    const rescheduleJob = React.useCallback(
+        (session) => window.HttpUtil.post(`/api/jobs/${encodeURIComponent(session)}/reschedule`, {}),
+        []
+    );
 
     return React.useMemo(
         () => ({
@@ -90,6 +94,7 @@ function useApi() {
             refreshNotifications,
             triggerJob,
             cancelJob,
+            rescheduleJob,
         }),
         [
             getStatus,
@@ -109,6 +114,7 @@ function useApi() {
             refreshNotifications,
             triggerJob,
             cancelJob,
+            rescheduleJob,
         ]
     );
 }

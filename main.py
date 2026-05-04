@@ -69,7 +69,12 @@ class ProactiveChatPlugin(
         # 会话差异配置管理器、通知中心与 Web 管理端
         self.session_override_manager = SessionOverrideManager(self.data_dir)
         self.notification_center = NotificationCenter(self)
-        self.web_admin_server = WebAdminServer(self)
+        try:
+            self.web_admin_server = WebAdminServer(self)
+        except Exception as e:
+            # Web 管理端属于增强能力，创建失败时仅禁用控制台，不影响插件主体继续加载。
+            self.web_admin_server = None
+            logger.error(f"[主动消息] Web 管理端组件创建失败喵，已自动禁用: {e}")
         # 插件版本统一通过版本工具读取，供遥测、通知系统、状态接口等多个模块复用。
         self.version = get_plugin_version()
         # 遥测管理器在插件实例创建阶段即初始化，但真正发请求仍由生命周期阶段控制。

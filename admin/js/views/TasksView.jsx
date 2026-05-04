@@ -127,12 +127,14 @@ function formatScheduleIntervalText(minMinutes, maxMinutes) {
     return `${maxValue} 分钟`;
 }
 
+
 function TasksView({ onRefresh }) {
     const { state, dispatch } = useAppContext();
     const api = useApi();
     // 每秒刷新当前时间，驱动任务卡片上的倒计时与进度条更新。
     const [nowMs, setNowMs] = React.useState(Date.now());
     const [triggerFeedbackMap, setTriggerFeedbackMap] = React.useState({});
+    const [rescheduleFeedbackMap, setRescheduleFeedbackMap] = React.useState({});
     const displayTimezone = state.config?.displayTimezone || 'Asia/Shanghai';
 
     React.useEffect(() => {
@@ -173,6 +175,27 @@ function TasksView({ onRefresh }) {
             await onRefresh();
         } catch (e) {
             dispatch({ type: 'SET_ERROR', payload: e.message || '取消任务失败' });
+        }
+    };
+
+    const rescheduleJob = async (session) => {
+        setRescheduleFeedbackMap((prev) => ({
+            ...prev,
+            [session]: { status: 'pending', text: '正在重新调度下一次主动消息时间…' },
+        }));
+        try {
+            const result = await api.rescheduleJob(session);
+            setRescheduleFeedbackMap((prev) => ({
+                ...prev,
+                [session]: { status: 'success', text: result?.message || '已重新调度下一次主动消息时间' },
+            }));
+            await onRefresh();
+        } catch (e) {
+            setRescheduleFeedbackMap((prev) => ({
+                ...prev,
+                [session]: { status: 'error', text: e.message || '重新调度失败，请稍后重试' },
+            }));
+            dispatch({ type: 'SET_ERROR', payload: e.message || '重新调度失败' });
         }
     };
 
@@ -227,12 +250,37 @@ function TasksView({ onRefresh }) {
         };
     }, [triggerFeedbackMap]);
 
+    React.useEffect(() => {
+        const successEntries = Object.entries(rescheduleFeedbackMap)
+            .filter(([, value]) => value?.status === 'success');
+        if (successEntries.length === 0) {
+            return undefined;
+        }
+
+        const timers = successEntries.map(([sessionId]) => setTimeout(() => {
+            setRescheduleFeedbackMap((prev) => {
+                const current = prev[sessionId];
+                if (!current || current.status !== 'success') {
+                    return prev;
+                }
+
+                const next = { ...prev };
+                delete next[sessionId];
+                return next;
+            });
+        }, 3000));
+
+        return () => {
+            timers.forEach((timer) => clearTimeout(timer));
+        };
+    }, [rescheduleFeedbackMap]);
+
     return (
         <Box>
             <Box className="tasks-header-row">
                 <div>
                     <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-                        当前调度任务 ({jobs.length})
+                        {`调度任务 (当前共 ${jobs.length} 个调度任务)`}
                     </Typography>
                 </div>
                 <Button variant="contained" onClick={onRefresh} startIcon={<span>🔄</span>} sx={{ borderRadius: 3, boxShadow: 'none', px: 2.25 }}>
@@ -258,13 +306,18 @@ function TasksView({ onRefresh }) {
                         const sessionDisplayName = String(job.session_display_name || job.session_name || sessionIdText || '--');
                         const hasAlias = Boolean(sessionDisplayName && sessionIdText && sessionDisplayName !== sessionIdText);
                         const sessionSubText = hasAlias ? sessionIdText : '';
+                        const sourceModeLabel = resolveSourceModeLabel(job.source_mode);
+                        const unansweredLabel = formatUnansweredLabel(job.unanswered_count, job.max_unanswered_times);
 
                         const isTriggerRunning = Boolean(job.manual_trigger_in_progress);
                         const triggerFeedback = triggerFeedbackMap[job.id];
+                        const rescheduleFeedback = rescheduleFeedbackMap[job.id];
+                        const isRescheduling = rescheduleFeedback?.status === 'pending';
                         const triggerButtonLabel = isTriggerRunning ? '触发中…' : '立即触发';
                         const triggerHelperText = isTriggerRunning
                             ? (triggerFeedback?.text || '正在触发，等待 LLM 回复完成…')
                             : triggerFeedback?.text;
+                        const rescheduleHelperText = rescheduleFeedback?.text;
                         const scheduleIntervalText = formatScheduleIntervalText(
                             job.schedule_min_interval_minutes,
                             job.schedule_max_interval_minutes,
@@ -273,8 +326,8 @@ function TasksView({ onRefresh }) {
 
                         return (
                             <div className={`card task-card-enhanced ${task.status === 'urgent' ? 'is-urgent' : ''} ${task.status === 'expired' ? 'is-expired' : ''}`} key={job.id}>
-                                <div className="task-card-top">
-                                    <div className="task-card-title-block">
+                                <div className="task-card-top" style={{ overflow: 'visible' }}>
+                                    <div className="task-card-title-block" style={{ overflow: 'visible' }}>
                                         <Typography variant="subtitle2" className="task-card-kicker">
                                             会话
                                         </Typography>
@@ -284,19 +337,52 @@ function TasksView({ onRefresh }) {
                                         >
                                             {sessionDisplayName}
                                         </Typography>
-                                        {sessionSubText ? (
-                                            <Typography variant="caption" className="task-card-session-sub mono">
-                                                {`UMO · ${sessionSubText}`}
-                                            </Typography>
-                                        ) : null}
                                     </div>
-                                    <Chip
-                                        label={`未回复: ${job.unanswered_count ?? 0}`}
-                                        size="small"
-                                        color={chipColor}
-                                        variant={job.unanswered_count > 0 ? 'filled' : 'outlined'}
-                                    />
+                                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, flexShrink: 0 }}>
+                                        <Box
+                                            sx={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                px: 1.25,
+                                                py: 0.5,
+                                                borderRadius: '999px',
+                                                fontSize: 11,
+                                                fontWeight: 800,
+                                                whiteSpace: 'nowrap',
+                                                border: '1px solid rgba(103, 80, 164, 0.18)',
+                                                background: 'rgba(103, 80, 164, 0.08)',
+                                                color: 'var(--md-sys-color-primary)',
+                                                lineHeight: 1.2,
+                                            }}
+                                        >
+                                            {sourceModeLabel}
+                                        </Box>
+                                        <Chip
+                                            label={unansweredLabel}
+                                            size="small"
+                                            color={chipColor}
+                                            variant={job.unanswered_count > 0 ? 'filled' : 'outlined'}
+                                        />
+                                    </Box>
                                 </div>
+
+                                {sessionSubText ? (
+                                    <Typography
+                                        variant="caption"
+                                        className="task-card-session-sub mono"
+                                        sx={{
+                                            display: 'block',
+                                            width: '100%',
+                                            mt: -0.5,
+                                            mb: 0.5,
+                                            overflow: 'visible',
+                                            whiteSpace: 'nowrap',
+                                        }}
+                                    >
+                                        {`UMO · ${sessionSubText}`}
+                                    </Typography>
+                                ) : null}
 
                                 <div className="task-next-run-panel">
                                     <div className="task-next-run-primary-row">
@@ -368,43 +454,69 @@ function TasksView({ onRefresh }) {
                                 </Box>
  
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 'auto', pt: 1.5 }}>
-                                   {triggerHelperText ? (
-                                       <Typography
-                                           variant="caption"
-                                           sx={{
-                                               minHeight: 20,
-                                               color: triggerFeedback?.status === 'error'
-                                                   ? 'error.main'
-                                                   : triggerFeedback?.status === 'success'
-                                                       ? 'success.main'
-                                                       : 'text.secondary',
-                                           }}
-                                       >
-                                           {triggerHelperText}
-                                       </Typography>
-                                   ) : null}
-                                   <Box sx={{ display: 'flex', gap: 1 }}>
-                                    <Button
-                                        variant="outlined"
-                                        size="small"
-                                        fullWidth
-                                        disabled={isTriggerRunning}
-                                        onClick={() => triggerNow(job.id)}
-                                        sx={{ borderRadius: 2.5 }}
-                                    >
-                                        {triggerButtonLabel}
-                                    </Button>
-                                    <Button
-                                        variant="outlined"
-                                        color="error"
-                                        size="small"
-                                        fullWidth
-                                        onClick={() => cancelJob(job.id)}
-                                        sx={{ borderRadius: 2.5 }}
-                                    >
-                                        取消任务
-                                    </Button>
-                                   </Box>
+                                    {triggerHelperText ? (
+                                        <Typography
+                                            variant="caption"
+                                            sx={{
+                                                minHeight: 20,
+                                                color: triggerFeedback?.status === 'error'
+                                                    ? 'error.main'
+                                                    : triggerFeedback?.status === 'success'
+                                                        ? 'success.main'
+                                                        : 'text.secondary',
+                                            }}
+                                        >
+                                            {triggerHelperText}
+                                        </Typography>
+                                    ) : null}
+                                    {rescheduleHelperText ? (
+                                        <Typography
+                                            variant="caption"
+                                            sx={{
+                                                minHeight: 20,
+                                                color: rescheduleFeedback?.status === 'error'
+                                                    ? 'error.main'
+                                                    : rescheduleFeedback?.status === 'success'
+                                                        ? 'success.main'
+                                                        : 'text.secondary',
+                                            }}
+                                        >
+                                            {rescheduleHelperText}
+                                        </Typography>
+                                    ) : null}
+                                    <Box sx={{ display: 'flex', gap: 1 }}>
+                                        <Button
+                                            variant="outlined"
+                                            size="small"
+                                            fullWidth
+                                            disabled={isTriggerRunning || isRescheduling}
+                                            onClick={() => triggerNow(job.id)}
+                                            sx={{ borderRadius: 2.5 }}
+                                        >
+                                            {triggerButtonLabel}
+                                        </Button>
+                                        <Button
+                                            variant="outlined"
+                                            size="small"
+                                            fullWidth
+                                            disabled={isTriggerRunning || isRescheduling}
+                                            onClick={() => rescheduleJob(job.id)}
+                                            sx={{ borderRadius: 2.5 }}
+                                        >
+                                            {isRescheduling ? '重新调度中…' : '重新调度'}
+                                        </Button>
+                                        <Button
+                                            variant="outlined"
+                                            color="error"
+                                            size="small"
+                                            fullWidth
+                                            disabled={isRescheduling}
+                                            onClick={() => cancelJob(job.id)}
+                                            sx={{ borderRadius: 2.5 }}
+                                        >
+                                            取消任务
+                                        </Button>
+                                    </Box>
                                 </Box>
                             </div>
                         );

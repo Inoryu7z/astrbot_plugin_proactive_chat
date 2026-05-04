@@ -110,7 +110,8 @@ function formatDateTime(value, timeZone = 'Asia/Shanghai', options = {}) {
         : `${parts.hour}:${parts.minute}`;
 
     // 统一输出为易读的“日期 + 时间”文本，供状态页、任务页、头部时钟复用。
-    return `${datePart} ${timePart}`;
+    // 日期与时间之间保留两个空格，增强卡片中时间文本的视觉层次。
+    return `${datePart}  ${timePart}`;
 }
 
 function formatFriendlyTime(value, timeZone = 'Asia/Shanghai') {
@@ -176,9 +177,30 @@ function formatDuration(totalSeconds, options = {}) {
 }
 
 
+function resolveSourceModeLabel(sourceMode) {
+    const normalized = String(sourceMode || '').trim().toLowerCase();
+    switch (normalized) {
+        case 'platform_message_history':
+            return '平台完整聊天流水';
+        case 'hybrid':
+            return '混合模式';
+        case 'conversation_history':
+        default:
+            return '当前 AstrBot LLM 对话历史';
+    }
+}
+
+function formatUnansweredLabel(currentCount, maxCount) {
+    const current = Math.max(0, Number(currentCount) || 0);
+    const max = Math.max(0, Number(maxCount) || 0);
+    return max > 0 ? `未回复次数: ${current}/${max}` : `未回复: ${current}`;
+}
+
 // 统一挂到 window，供各页面和组件直接调用，无需额外模块系统。
 window.parseDateish = parseDateish;
 window.formatDateTime = formatDateTime;
 window.formatFriendlyTime = formatFriendlyTime;
 window.formatDuration = formatDuration;
+window.resolveSourceModeLabel = resolveSourceModeLabel;
+window.formatUnansweredLabel = formatUnansweredLabel;
 

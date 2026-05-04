@@ -60,6 +60,7 @@ function StatusMetricRow({ label, value, emphasize = false, status = '' }) {
     );
 }
 
+
 function resolveStatusTimerCard(timer, nowMs, displayTimezone) {
     // 后端 target_time / started_at 以秒级时间戳返回，这里统一转为 Date 便于格式化和比较。
     const targetTime = parseDateish(timer.target_time ? Number(timer.target_time) * 1000 : null);
@@ -102,6 +103,7 @@ function resolveStatusTimerCard(timer, nowMs, displayTimezone) {
     const kindBadgeLabel = isGroupSilence
         ? '沉默重置型'
         : (isGroupSession ? '群自动触发' : '私聊自动触发');
+    const sourceModeLabel = resolveSourceModeLabel(timer.source_mode);
     const countdownText = targetTime
         ? (remainingSeconds > 0 ? `${formatDuration(remainingSeconds, { compact: true, maxUnits: 3 })} 后到期` : '等待下一轮刷新确认')
         : '暂无有效目标时间';
@@ -124,6 +126,8 @@ function resolveStatusTimerCard(timer, nowMs, displayTimezone) {
         sectionTitle,
         accentClass,
         kindBadgeLabel,
+        sourceModeLabel,
+        unansweredLabel: formatUnansweredLabel(timer.unanswered_count, timer.max_unanswered_times),
         countdownText,
         sessionDisplayName,
         sessionSubText,
@@ -158,8 +162,9 @@ function StatusTimerCard({ timer, displayTimezone, nowMs, resetHint }) {
                 </div>
                 <div className="status-timer-chip-stack">
                     <div className={`status-timer-kind-badge ${meta.accentClass}`}>{meta.kindBadgeLabel}</div>
+                    <div className="status-timer-kind-badge">{meta.sourceModeLabel}</div>
                     <Chip
-                        label={`未回复: ${meta.unanswered_count ?? 0}`}
+                        label={meta.unansweredLabel}
                         size="small"
                         color={chipColor}
                         variant={Number(meta.unanswered_count ?? 0) > 0 ? 'filled' : 'outlined'}
@@ -451,7 +456,7 @@ function StatusView({ onRefresh }) {
                         <Box className="status-timers-header-row">
                             <div>
                                 <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-                                    会话计时器可视化 ({timerCards.length})
+                                    {`会话计时器可视化 (当前共 ${timerCards.length} 个计时器)`}
                                 </Typography>
                                 <Typography variant="body2" className="tasks-header-subtitle">
                                     实时展示自动触发检测与群沉默检测的倒计时、进度和会话状态。此处卡片的倒计时结束后会进入任务管理页面
