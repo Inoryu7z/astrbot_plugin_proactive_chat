@@ -227,7 +227,7 @@ class LlmMixin:
         mgr = getattr(self.context, "message_history_manager", None)
         if not mgr:
             logger.warning(
-                "[主动消息] 当前 AstrBot Context 未暴露 message_history_manager，无法读取平台聊天流水喵。"
+                "[主动消息] 当前上下文未提供消息历史管理器（message_history_manager），因此无法读取平台流水喵。"
             )
             return [], 0
 
@@ -244,7 +244,7 @@ class LlmMixin:
                     return normalized_records, len(normalized_records)
             except Exception as e:
                 logger.warning(
-                    f"[主动消息] 读取平台聊天流水失败喵: platform_id={platform_id}, user_id={user_id}, err={e}",
+                    f"[主动消息] 读取平台流水失败喵：平台标识为“{platform_id}”，用户标识为“{user_id}”，异常信息：{e}",
                     exc_info=True,
                 )
                 continue
@@ -505,7 +505,7 @@ class LlmMixin:
                 effective_history = [platform_context]
             else:
                 logger.warning(
-                    f"[主动消息] 上下文模式为 platform_message_history，但平台流水为空，回退 conversation_history ({conversation_count}) 条喵。"
+                    f"[主动消息] 平台流水模式下没有读取到平台流水，已回退为对话历史，共 {conversation_count} 条喵。"
                 )
                 effective_history = conversation_history
         elif source_mode == "hybrid":
@@ -514,19 +514,25 @@ class LlmMixin:
                 effective_history = [platform_context, *conversation_history]
             else:
                 logger.warning(
-                    f"[主动消息] 上下文模式为 hybrid，但平台流水为空，仅使用 conversation_history ({conversation_count}) 条喵。"
+                    f"[主动消息] 混合模式下没有读取到平台流水，因此仅使用对话历史，共 {conversation_count} 条喵。"
                 )
                 effective_history = conversation_history
         else:
             logger.warning(
-                f"[主动消息] 未知上下文模式 '{source_mode}'，回退 conversation_history 喵。"
+                f"[主动消息] 遇到未识别的上下文模式“{source_mode}”，已回退为对话历史喵。"
             )
             effective_history = conversation_history
 
+        mode_label_map = {
+            "conversation_history": "对话历史",
+            "platform_message_history": "平台流水",
+            "hybrid": "混合模式",
+        }
+        source_mode_label = mode_label_map.get(source_mode, source_mode)
         logger.info(
-            f"[主动消息] 上下文统计喵: mode={source_mode}, conversation_history={conversation_count}, "
-            f"platform_records={platform_records_count}, platform_injected={platform_injected_count}, "
-            f"platform_chars={platform_chars}, effective_context={len(effective_history)}"
+            f"[主动消息] 上下文注入来源：{source_mode_label}，读取到对话历史 {conversation_count} 条，"
+            f"平台流水原始记录 {platform_records_count} 条，注入上下文 {platform_injected_count} 条，"
+            f"平台流水上下文长度 {platform_chars} 字，最终提供给模型的上下文共 {len(effective_history)} 条喵。"
         )
         return effective_history
 
@@ -577,7 +583,7 @@ class LlmMixin:
 
             if not conv_id:
                 logger.warning(
-                    f"[主动消息] 无法获取或创建 {self._get_session_log_str(session_id)} 的对话ID，跳过本次任务喵。"
+                    f"[主动消息] 无法获取或创建 {self._get_session_log_str(session_id)} 的对话 ID，跳过本次任务喵。"
                 )
                 return None
 
@@ -656,11 +662,7 @@ class LlmMixin:
                 unanswered_count=current_unanswered_count,
             )
 
-            logger.info(
-                f"[主动消息] 成功加载上下文喵: mode={context_settings['source_mode']}, "
-                f"conversation_history={len(pure_history_messages)}, "
-                f"effective_context={len(effective_history_messages)}"
-            )
+            logger.info("[主动消息] 上下文与人格设定已准备完成喵。")
             if self.telemetry and self.telemetry.enabled:
                 # 这里只记录“上下文准备是否成功”和历史条数等统计值，不上传任何历史正文或人格提示词内容。
                 self._track_task(
@@ -718,7 +720,7 @@ class LlmMixin:
             "{{unanswered_count}}", str(unanswered_count)
         ).replace("{{current_time}}", now_str)
 
-        logger.info("[主动消息] 已生成包含动机和时间的 Prompt 喵。")
+        logger.debug("[主动消息] 已生成包含动机和时间的 Prompt 喵。")
 
         llm_response_obj = None
         try:
@@ -731,7 +733,7 @@ class LlmMixin:
                 contexts=history_messages,
                 system_prompt=system_prompt,
             )
-            logger.info("[主动消息] 使用新API调用LLM成功喵。")
+            logger.info("[主动消息] 使用新 API 调用 LLM 成功喵。")
             if self.telemetry and self.telemetry.enabled:
                 # 记录新接口调用成功，用于观察新版统一 LLM API 的实际可用性与覆盖情况。
                 self._track_task(
@@ -747,7 +749,7 @@ class LlmMixin:
                     )
                 )
         except Exception as llm_error:
-            logger.error(f"[主动消息] 使用新API调用LLM失败喵: {llm_error}")
+            logger.error(f"[主动消息] 使用新 API 调用 LLM 失败喵: {llm_error}")
             logger.info(f"[主动消息] 错误类型喵: {type(llm_error).__name__}")
             logger.info(f"[主动消息] 错误详情喵: {str(llm_error)}")
             if self.telemetry and self.telemetry.enabled:
@@ -770,7 +772,7 @@ class LlmMixin:
                         contexts=history_messages,
                         system_prompt=system_prompt,
                     )
-                    logger.info("[主动消息] 使用传统API回退成功喵。")
+                    logger.info("[主动消息] 使用传统 API 回退成功喵。")
                     if self.telemetry and self.telemetry.enabled:
                         # 记录回退接口成功，帮助判断旧 Provider 接口仍承担了多少实际流量。
                         self._track_task(
@@ -789,7 +791,7 @@ class LlmMixin:
                     logger.warning("[主动消息] 未找到 LLM Provider，放弃并重新调度喵。")
                     return None, final_user_simulation_prompt
             except Exception as fallback_error:
-                logger.error(f"[主动消息] 传统API回退也失败喵: {fallback_error}")
+                logger.error(f"[主动消息] 传统 API 回退也失败喵: {fallback_error}")
                 logger.info(
                     f"[主动消息] 回退错误类型喵: {type(fallback_error).__name__}"
                 )
