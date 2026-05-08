@@ -370,6 +370,116 @@ class SenderMixin:
                     )
                 )
 
+    async def _synthesize_tts(self, session_id: str, text: str) -> str | None:
+        """尝试合成语音，优先使用 tts_plus 插件，回退到内置 TTS provider。"""
+        audio_path = await self._tts_plus_synthesize(session_id, text)
+        if audio_path:
+            return audio_path
+
+        tts_provider = self.context.get_using_tts_provider(umo=session_id)
+        if tts_provider:
+            result = await tts_provider.get_audio(text)
+            if result:
+                logger.info("[主动消息] 使用内置 TTS provider 合成语音喵。")
+                return result
+
+        return None
+
+    async def _tts_plus_synthesize(self, session_id: str, text: str) -> str | None:
+        """尝试通过 tts_plus 插件合成语音。"""
+        try:
+            from astrbot.api.star import star_map
+
+            tts_plus = None
+            for star_inst in star_map.values():
+                cls_name = type(star_inst).__name__
+                mod_name = getattr(type(star_inst), "__module__", "")
+                if "tts_plus" in mod_name or "TTSPlus" in cls_name:
+                    tts_plus = star_inst
+                    break
+
+            if tts_plus is None:
+                return None
+
+            persona_id = await self._get_persona_id_for_session(session_id)
+            if not persona_id:
+                logger.debug("[主动消息] 未获取到人格ID，跳过 tts_plus 喵。")
+                return None
+
+            result = tts_plus._get_persona_provider(persona_id)
+            if not result:
+                logger.debug(f"[主动消息] tts_plus 中人格 {persona_id} 未配置 TTS provider 喵。")
+                return None
+
+            provider, persona_cfg = result
+
+            if provider.provider_name == "mimo":
+                provider_id_used = str(persona_cfg.get("provider_id", ""))
+                b64 = tts_plus.config.get_audio_sample_base64(provider_id_used)
+                if b64:
+                    provider.set_voice_sample(b64, "audio/mpeg")
+
+            voice = provider.get_default_voice()
+            speed_override = float(persona_cfg.get("speed", 1.0) or 1.0)
+
+            from astrbot_plugin_tts_plus.text import build_dual_text, strip_all_style_tags
+
+            dual = build_dual_text(
+                text,
+                provider_style_format=provider.style_tag_format,
+                keep_minimax_expressions=(provider.provider_name == "minimax"),
+                keep_minimax_pauses=(provider.provider_name == "minimax"),
+            )
+
+            temp_dir = tts_plus._get_plugin_dir() / "temp"
+            temp_dir.mkdir(exist_ok=True)
+
+            audio_result = await provider.synth(
+                text=dual.tts_text,
+                voice=voice,
+                out_dir=temp_dir,
+                speed=speed_override if speed_override > 0 else None,
+            )
+
+            if audio_result and audio_result.exists():
+                logger.info(f"[主动消息] tts_plus 合成语音成功: {audio_result.name} 喵。")
+                return str(audio_result)
+
+            return None
+
+        except ImportError:
+            return None
+        except Exception as e:
+            logger.debug(f"[主动消息] tts_plus 合成失败，将回退到内置 TTS: {e}")
+            return None
+
+    async def _get_persona_id_for_session(self, session_id: str) -> str | None:
+        """获取会话对应的人格ID。"""
+        try:
+            conv_mgr = getattr(self.context, "conversation_manager", None)
+            if not conv_mgr:
+                return None
+
+            umo = session_id
+            curr_cid = await conv_mgr.get_curr_conversation_id(umo)
+            if curr_cid:
+                conversation = await conv_mgr.get_conversation(umo, curr_cid)
+                if conversation and conversation.persona_id:
+                    return str(conversation.persona_id).strip() or None
+
+            persona_mgr = getattr(self.context, "persona_manager", None)
+            if persona_mgr and hasattr(persona_mgr, "get_default_persona_v3"):
+                default_persona = await persona_mgr.get_default_persona_v3(umo=umo)
+                if default_persona:
+                    name = default_persona.get("name") or default_persona.get("persona_id") or default_persona.get("id")
+                    if name and str(name).strip():
+                        return str(name).strip()
+
+            return None
+        except Exception as e:
+            logger.debug(f"[主动消息] 获取人格ID失败: {e}")
+            return None
+
     async def _send_proactive_message(self, session_id: str, text: str) -> None:
         """发送主动消息（支持TTS与分段）。"""
         session_config = self._get_session_config(session_id)
@@ -386,24 +496,21 @@ class SenderMixin:
         tts_conf = session_config.get("tts_settings", {})
         seg_conf = session_config.get("segmented_reply_settings", {})
 
-        # 先尝试 TTS：成功后是否继续发文本由 always_send_text 控制
+        # 先尝试 TTS：优先使用 tts_plus 插件，再回退到内置 TTS
         is_tts_sent = False
         if tts_conf.get("enable_tts", True):
             try:
                 logger.info("[主动消息] 尝试进行手动TTS喵。")
-                tts_provider = self.context.get_using_tts_provider(umo=session_id)
-                if tts_provider:
-                    audio_path = await tts_provider.get_audio(text)
-                    if audio_path:
-                        await self._send_chain_with_hooks(
-                            session_id, [Record(file=audio_path)]
-                        )
-                        is_tts_sent = True
-                        await asyncio.sleep(0.5)
+                audio_path = await self._synthesize_tts(session_id, text)
+                if audio_path:
+                    await self._send_chain_with_hooks(
+                        session_id, [Record(file=audio_path)]
+                    )
+                    is_tts_sent = True
+                    await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"[主动消息] 手动TTS流程发生异常喵: {e}")
                 if self.telemetry and self.telemetry.enabled:
-                    # TTS 失败不一定意味着文本发送失败，因此单独挂到 tts 子模块下记录。
                     self._track_task(
                         asyncio.create_task(
                             self.telemetry.track_error(
