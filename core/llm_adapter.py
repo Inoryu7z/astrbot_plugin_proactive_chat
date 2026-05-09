@@ -529,7 +529,7 @@ class LlmMixin:
             "hybrid": "混合模式",
         }
         source_mode_label = mode_label_map.get(source_mode, source_mode)
-        logger.info(
+        logger.debug(
             f"[主动消息] 上下文注入来源：{source_mode_label}，读取到对话历史 {conversation_count} 条，"
             f"平台流水原始记录 {platform_records_count} 条，注入上下文 {platform_injected_count} 条，"
             f"平台流水上下文长度 {platform_chars} 字，最终提供给模型的上下文共 {len(effective_history)} 条喵。"
@@ -630,7 +630,7 @@ class LlmMixin:
                 )
                 if default_persona:
                     original_system_prompt = default_persona["prompt"]
-                    logger.info("[主动消息] 使用默认人格设定喵")
+                    logger.debug("[主动消息] 使用默认人格设定喵")
 
             if not original_system_prompt:
                 logger.error(
@@ -662,7 +662,7 @@ class LlmMixin:
                 unanswered_count=current_unanswered_count,
             )
 
-            logger.info("[主动消息] 上下文与人格设定已准备完成喵。")
+            logger.debug("[主动消息] 上下文与人格设定已准备完成喵。")
             if self.telemetry and self.telemetry.enabled:
                 # 这里只记录“上下文准备是否成功”和历史条数等统计值，不上传任何历史正文或人格提示词内容。
                 self._track_task(
@@ -733,7 +733,7 @@ class LlmMixin:
                 contexts=history_messages,
                 system_prompt=system_prompt,
             )
-            logger.info("[主动消息] 使用新 API 调用 LLM 成功喵。")
+            logger.debug("[主动消息] 使用新 API 调用 LLM 成功喵。")
             if self.telemetry and self.telemetry.enabled:
                 # 记录新接口调用成功，用于观察新版统一 LLM API 的实际可用性与覆盖情况。
                 self._track_task(
@@ -750,8 +750,8 @@ class LlmMixin:
                 )
         except Exception as llm_error:
             logger.error(f"[主动消息] 使用新 API 调用 LLM 失败喵: {llm_error}")
-            logger.info(f"[主动消息] 错误类型喵: {type(llm_error).__name__}")
-            logger.info(f"[主动消息] 错误详情喵: {str(llm_error)}")
+            logger.debug(f"[主动消息] 错误类型喵: {type(llm_error).__name__}")
+            logger.debug(f"[主动消息] 错误详情喵: {str(llm_error)}")
             if self.telemetry and self.telemetry.enabled:
                 # 新接口失败时单独记录，便于与 fallback_api 的失败率拆分分析。
                 self._track_task(
@@ -772,7 +772,7 @@ class LlmMixin:
                         contexts=history_messages,
                         system_prompt=system_prompt,
                     )
-                    logger.info("[主动消息] 使用传统 API 回退成功喵。")
+                    logger.debug("[主动消息] 使用传统 API 回退成功喵。")
                     if self.telemetry and self.telemetry.enabled:
                         # 记录回退接口成功，帮助判断旧 Provider 接口仍承担了多少实际流量。
                         self._track_task(
@@ -819,7 +819,7 @@ class LlmMixin:
                     "[主动消息] 这通常是因为上下文或 Prompt 中包含了无法解析的对象喵。已拦截本次发送喵。"
                 )
                 return None, final_user_simulation_prompt
-            logger.info(f"[主动消息] LLM 已生成文本喵，长度: {len(response_text)}。")
+            logger.debug(f"[主动消息] LLM 已生成文本喵，长度: {len(response_text)}。")
             if self.telemetry and self.telemetry.enabled:
                 # 这里只统计响应长度与会话类型，不上传生成正文，避免把真实对话内容带入遥测。
                 self._track_task(

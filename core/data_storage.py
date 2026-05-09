@@ -134,7 +134,7 @@ class StorageMixin:
             normalized_id = self._normalize_session_id(session_id)
             if normalized_id != session_id:
                 changed = True
-                logger.info(
+                logger.debug(
                     f"[主动消息] 规范化会话键: {self._get_session_log_str(session_id)} -> {normalized_id}"
                 )
 
@@ -175,7 +175,7 @@ class StorageMixin:
         # 执行删除并记录日志
         for session_id in invalid_sessions:
             del self.session_data[session_id]
-            logger.info(
+            logger.debug(
                 f"[主动消息] 清理了无效的会话数据: {self._get_session_log_str(session_id)}"
             )
 

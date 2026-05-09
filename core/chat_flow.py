@@ -84,7 +84,7 @@ class ProactiveCoreMixin:
                 user_message=user_msg_obj,
                 assistant_message=assistant_msg_obj,
             )
-            logger.info("[主动消息] 已成功将本次主动消息存档至对话历史喵。")
+            logger.debug("[主动消息] 已成功将本次主动消息存档至对话历史喵。")
         except Exception as e:
             logger.error(f"[主动消息] 存档对话历史失败喵: {e}")
             logger.warning("[主动消息] 对话存档失败喵，但会继续执行后续步骤喵。")
@@ -103,7 +103,7 @@ class ProactiveCoreMixin:
             self.session_data.setdefault(session_id, {})["unanswered_count"] = (
                 new_unanswered_count
             )
-            logger.info(
+            logger.debug(
                 f"[主动消息] {self._get_session_log_str(session_id)} 的第 {new_unanswered_count} 次主动消息已发送完成，当前未回复次数: {new_unanswered_count} 次喵。"
             )
 

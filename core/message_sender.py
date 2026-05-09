@@ -380,7 +380,7 @@ class SenderMixin:
         if tts_provider:
             result = await tts_provider.get_audio(text)
             if result:
-                logger.info("[主动消息] 使用内置 TTS provider 合成语音喵。")
+                logger.debug("[主动消息] 使用内置 TTS provider 合成语音喵。")
                 return result
 
         return None
@@ -442,7 +442,7 @@ class SenderMixin:
             )
 
             if audio_result and audio_result.exists():
-                logger.info(f"[主动消息] tts_plus 合成语音成功: {audio_result.name} 喵。")
+                logger.debug(f"[主动消息] tts_plus 合成语音成功: {audio_result.name} 喵。")
                 return str(audio_result)
 
             return None
@@ -489,7 +489,7 @@ class SenderMixin:
             )
             return
 
-        logger.info(
+        logger.debug(
             f"[主动消息] 开始发送 {self._get_session_log_str(session_id, session_config)} 的主动消息喵。"
         )
 
@@ -500,7 +500,7 @@ class SenderMixin:
         is_tts_sent = False
         if tts_conf.get("enable_tts", True):
             try:
-                logger.info("[主动消息] 尝试进行手动TTS喵。")
+                logger.debug("[主动消息] 尝试进行手动TTS喵。")
                 audio_path = await self._synthesize_tts(session_id, text)
                 if audio_path:
                     await self._send_chain_with_hooks(

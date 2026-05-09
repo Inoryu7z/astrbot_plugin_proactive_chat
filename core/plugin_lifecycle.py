@@ -238,7 +238,7 @@ class LifecycleMixin:
                 try:
                     async with self.data_lock:
                         await self._save_data_internal()
-                    logger.info("[主动消息] 会话数据已保存喵。")
+                    logger.debug("[主动消息] 会话数据已保存喵。")
                 except Exception as e:
                     logger.error(f"[主动消息] 保存数据时出错喵: {e}")
 
