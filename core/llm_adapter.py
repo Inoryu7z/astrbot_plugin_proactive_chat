@@ -32,6 +32,125 @@ class LlmMixin:
     context: Any
     timezone: Any
     telemetry: Any
+    session_data: dict
+
+    async def _apply_on_llm_request_hooks(
+        self,
+        session_id: str,
+        system_prompt: str,
+    ) -> str:
+        """手动触发 on_llm_request 钩子，让其他插件能注入内容到 system_prompt。
+
+        context.llm_generate() 不经过 Pipeline，不会自动触发 on_llm_request 事件，
+        因此需要手动调用所有注册了 OnLLMRequestEvent 的处理器，
+        使 DayFlow、daymind 等依赖该钩子的插件能正常注入日程、心情等信息。
+        """
+        try:
+            from astrbot.core.provider.entities import ProviderRequest
+            from astrbot.core.star.star_handler import EventType, star_handlers_registry
+        except ImportError:
+            logger.debug(
+                "[主动消息] 无法导入 ProviderRequest 或 star_handler，跳过 on_llm_request 钩子触发喵。"
+            )
+            return system_prompt
+
+        handlers = star_handlers_registry.get_handlers_by_event_type(
+            EventType.OnLLMRequestEvent,
+        )
+        if not handlers:
+            return system_prompt
+
+        parsed = self._parse_session_id(session_id)
+        if not parsed:
+            logger.debug(
+                f"[主动消息] 无法解析会话 ID {session_id}，跳过 on_llm_request 钩子触发喵。"
+            )
+            return system_prompt
+
+        platform_name, msg_type_str, target_id = parsed
+
+        platform_inst = None
+        for p in self.context.platform_manager.platform_insts:
+            if p.meta().id == platform_name:
+                platform_inst = p
+                break
+        if not platform_inst:
+            for p in self.context.platform_manager.platform_insts:
+                if p.meta().name == platform_name:
+                    platform_inst = p
+                    break
+        if not platform_inst:
+            logger.debug(
+                f"[主动消息] 找不到平台实例 {platform_name}，跳过 on_llm_request 钩子触发喵。"
+            )
+            return system_prompt
+
+        from astrbot.core.platform.astrbot_message import AstrBotMessage, Group, MessageMember
+        from astrbot.core.platform.message_type import MessageType
+
+        try:
+            from astrbot.api.event import AstrMessageEvent as EventCls
+        except ImportError:
+            try:
+                from astrbot.core.platform.astr_message_event import (
+                    AstrMessageEvent as EventCls,
+                )
+            except ImportError:
+                logger.debug(
+                    "[主动消息] 无法导入 AstrMessageEvent，跳过 on_llm_request 钩子触发喵。"
+                )
+                return system_prompt
+
+        message_obj = AstrBotMessage()
+        if "Friend" in msg_type_str:
+            message_obj.type = MessageType.FRIEND_MESSAGE
+        elif "Group" in msg_type_str:
+            message_obj.type = MessageType.GROUP_MESSAGE
+            message_obj.group = Group(group_id=target_id)
+        else:
+            message_obj.type = MessageType.FRIEND_MESSAGE
+        message_obj.session_id = target_id
+        message_obj.message = []
+        message_obj.self_id = self.session_data.get(session_id, {}).get(
+            "self_id", "bot"
+        )
+        message_obj.sender = MessageMember(user_id=target_id)
+        message_obj.message_str = ""
+        message_obj.raw_message = None
+        message_obj.message_id = ""
+
+        event = EventCls(
+            message_str="",
+            message_obj=message_obj,
+            platform_meta=platform_inst.meta(),
+            session_id=target_id,
+        )
+
+        req = ProviderRequest()
+        req.session_id = session_id
+        req.system_prompt = system_prompt
+
+        hook_count = 0
+        for handler in handlers:
+            try:
+                await handler.handler(event, req)
+                hook_count += 1
+                logger.debug(
+                    f"[主动消息] 已执行 on_llm_request 钩子: {handler.handler_full_name} 喵。"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[主动消息] 执行 on_llm_request 钩子失败喵！来源: {handler.handler_full_name}, "
+                    f"错误类型: {type(e).__name__}, 错误详情: {e}"
+                )
+
+        if hook_count > 0:
+            logger.info(
+                f"[主动消息] 已触发 {hook_count} 个 on_llm_request 钩子，"
+                f"system_prompt 长度: {len(system_prompt)} → {len(req.system_prompt)} 喵。"
+            )
+
+        return req.system_prompt
 
     def _parse_bool_setting(self, value: Any, default: bool) -> bool:
         if isinstance(value, bool):
@@ -721,6 +840,10 @@ class LlmMixin:
         ).replace("{{current_time}}", now_str)
 
         logger.debug("[主动消息] 已生成包含动机和时间的 Prompt 喵。")
+
+        system_prompt = await self._apply_on_llm_request_hooks(
+            session_id, system_prompt
+        )
 
         llm_response_obj = None
         try:

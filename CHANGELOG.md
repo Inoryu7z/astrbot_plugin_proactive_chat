@@ -5,6 +5,16 @@
 <!-- markdownlint-disable MD041 -->
 # ChangeLog
 
+# 2026/05/09 v1.2.4
+
+## 🚀 What's Changed
+
+### 🐛 Bug Fixes (修复)
+
+- 修复主动消息生成时 `on_llm_request` 事件钩子未被触发的问题。由于 `context.llm_generate()` 不经过 AstrBot Pipeline，DayFlow（日程注入）、daymind（心情与思考注入）等依赖该钩子的插件无法将信息注入到主动消息的 system_prompt 中，导致 LLM 凭碎片信息猜测日程时间，大部分时候对不上。现在插件会在调用 LLM 前手动触发所有 `OnLLMRequestEvent` 处理器
+
+---
+
 # 2026/05/06 v1.2.3
 
 ## 🚀 What's Changed
