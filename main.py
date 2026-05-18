@@ -28,6 +28,7 @@ from .core.session_parser import SessionMixin
 from .core.task_scheduler import SchedulerMixin
 from .core.telemetry_manager import TelemetryManager
 from .core.web_admin_server import WebAdminServer
+from .utils.log_util import set_verbose
 from .utils.version import get_plugin_version
 
 
@@ -52,12 +53,14 @@ class ProactiveChatPlugin(
 
         # 注入的配置对象（由 AstrBot 框架提供）
         self.config: AstrBotConfig = config
+        # 根据 debug_mode 配置项控制日志详细程度
+        set_verbose(bool(self.config.get("debug_mode", False)))
         # 调度器与时区会在 initialize 中初始化
         self.scheduler = None  # AsyncIOScheduler 实例（initialize 中创建）
         self.timezone = None  # ZoneInfo 时区对象（initialize 中加载）
 
         # 使用 StarTools 获取插件专属数据目录（Path 对象）
-        self.data_dir = star.StarTools.get_data_dir("astrbot_plugin_proactive_chat")
+        self.data_dir = star.StarTools.get_data_dir("astrbot_plugin_proactive_chat_Inoryu7z")
         self.session_data_file = self.data_dir / "session_data.json"
 
         # 共享锁与持久化数据容器
@@ -175,7 +178,7 @@ class ProactiveChatPlugin(
             tb = exception.__traceback__
             while tb is not None:
                 filename = tb.tb_frame.f_code.co_filename
-                if "astrbot_plugin_proactive_chat" in filename:
+                if "astrbot_plugin_proactive_chat_Inoryu7z" in filename:
                     is_plugin_exception = True
                     break
                 tb = tb.tb_next

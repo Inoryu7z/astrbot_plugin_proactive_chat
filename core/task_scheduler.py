@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from astrbot.api import logger
+from ..utils.log_util import plog
 
 
 class SchedulerMixin:
@@ -93,7 +94,7 @@ class SchedulerMixin:
             try:
                 self.auto_trigger_timers[session_id].cancel()
                 cancelled = True
-                logger.info(
+                plog.verbose(
                     f"[主动消息] 已取消 {self._get_session_log_str(session_id)} 的自动触发计时器喵。"
                 )
             except Exception as e:
@@ -362,7 +363,7 @@ class SchedulerMixin:
         auto_trigger_minutes = auto_trigger_settings.get(
             "auto_trigger_after_minutes", 5
         )
-        logger.info(
+        plog.verbose(
             f"[主动消息] 已为 {self._get_session_log_str(resolved_session_id)} 设置自动触发器喵，"
             f"将在 {auto_trigger_minutes} 分钟后检查是否需要自动触发喵。"
         )

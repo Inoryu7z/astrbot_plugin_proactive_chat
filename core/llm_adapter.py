@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from astrbot.api import logger
+from ..utils.log_util import plog
 
 
 class LlmMixin:
@@ -145,7 +146,7 @@ class LlmMixin:
                 )
 
         if hook_count > 0:
-            logger.info(
+            plog.verbose(
                 f"[主动消息] 已触发 {hook_count} 个 on_llm_request 钩子，"
                 f"system_prompt 长度: {len(system_prompt)} → {len(req.system_prompt)} 喵。"
             )
@@ -686,14 +687,14 @@ class LlmMixin:
                     break
 
             if not conv_id:
-                logger.info(
+                plog.verbose(
                     f"[主动消息] {self._get_session_log_str(session_id)} 是新会话，尝试创建新对话喵。"
                 )
                 try:
                     conv_id = await self.context.conversation_manager.new_conversation(
                         session_id
                     )
-                    logger.info(f"[主动消息] 新对话创建成功喵，ID: {conv_id}")
+                    plog.verbose(f"[主动消息] 新对话创建成功喵，ID: {conv_id}")
                 except ValueError:
                     raise
                 except Exception as e:

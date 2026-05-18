@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from astrbot.api import logger
+from ..utils.log_util import plog
 from astrbot.api.event import AstrMessageEvent
 
 
@@ -74,7 +75,7 @@ class EventsMixin:
             and normalized_session_id not in self.first_message_logged
         ):
             self.first_message_logged.add(normalized_session_id)
-            logger.info(
+            plog.verbose(
                 f"[主动消息] 已记录 {self._get_session_log_str(normalized_session_id, session_config)} 的消息时间并取消自动触发喵。"
             )
 
@@ -105,11 +106,11 @@ class EventsMixin:
         self._purge_related_jobs(normalized_session_id)
 
         if cancelled:
-            logger.info(
+            plog.verbose(
                 f"[主动消息] 用户已回复喵，已取消 {self._get_session_log_str(normalized_session_id, session_config)} 的主动消息任务喵。"
             )
 
-        logger.info(
+        plog.verbose(
             f"[主动消息] 重置 {self._get_session_log_str(normalized_session_id, session_config)} 的未回复计数器为0喵。"
         )
         await self._schedule_next_chat_and_save(
@@ -210,7 +211,7 @@ class EventsMixin:
             and normalized_session_id not in self.first_message_logged
         ):
             self.first_message_logged.add(normalized_session_id)
-            logger.info(
+            plog.verbose(
                 f"[主动消息] 已记录 {self._get_session_log_str(normalized_session_id, session_config)} 的消息时间并取消自动触发喵。"
             )
 
@@ -256,11 +257,11 @@ class EventsMixin:
         self._purge_related_jobs(normalized_session_id)
 
         if cancelled:
-            logger.info(
+            plog.verbose(
                 f"[主动消息] 群聊活跃喵，已取消 {self._get_session_log_str(normalized_session_id, session_config)} 的主动消息任务喵。"
             )
         elif had_scheduled_task:
-            logger.info(
+            plog.verbose(
                 f"[主动消息] 群聊活跃喵，{self._get_session_log_str(normalized_session_id, session_config)} 未找到可取消的主动消息任务（可能已被提前清理）喵。"
             )
 

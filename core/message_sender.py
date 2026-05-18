@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
+from ..utils.log_util import plog
 from astrbot.core.message.components import Plain, Record
 from astrbot.core.message.message_event_result import MessageChain, MessageEventResult
 from astrbot.core.platform.astrbot_message import AstrBotMessage, Group, MessageMember
@@ -599,6 +600,6 @@ class SenderMixin:
         # Bot 在群聊发言后需要重置沉默计时
         if self._is_group_session(session_id):
             await self._reset_group_silence_timer(session_id)
-            logger.info(
+            plog.verbose(
                 f"[主动消息] Bot主动消息已发送，已重置 {self._get_session_log_str(session_id, session_config)} 的沉默倒计时喵。"
             )

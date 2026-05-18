@@ -1,4 +1,10 @@
 {
+    "debug_mode": {
+        "description": "🐛 调试模式",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，插件会输出详细的调试日志（如每条消息的计时器操作、LLM调用中间步骤等）。关闭时仅输出关键生命周期日志（插件加载/终止、消息发送成功/失败、调度安排等），保持日志干净。"
+    },
     "friend_settings": {
         "description": "👤 私聊全局配置",
         "type": "object",
